@@ -1281,5 +1281,64 @@ module Bosh::Director
         expect { @job.resolve_package_dependencies(packages) }.to raise_exception
       end
     end
+
+    describe 'process_release' do
+      subject(:job) { Jobs::UpdateRelease.new(release_path) }
+      let(:release_dir) { Test::ReleaseHelper.new.create_release_tarball(manifest) }
+      let(:release_path) { File.join(release_dir, 'release.tgz') }
+      let(:manifest) do
+        {
+          'name' => 'appcloud',
+          'version' => release_version,
+          'commit_hash' => '12345678',
+          'uncommitted_changes' => false,
+          'jobs' => manifest_jobs,
+          'packages' => manifest_packages,
+        }
+      end
+      let(:release_version) { '42+dev.6' }
+      let(:release) { Models::Release.make(name: 'appcloud') }
+      let(:manifest_packages) { nil }
+      let(:manifest_jobs) { nil }
+      let(:extracted_release_dir) {job.extract_release}
+
+      before do
+        allow(Dir).to receive(:mktmpdir).and_return(release_dir)
+        job.verify_manifest(extracted_release_dir)
+      end
+
+      context 'when upload release fails' do
+        before(:each) do
+          module Jobs
+            class UpdateRelease
+              attr_reader :fix
+            end
+          end
+          rv = Models::ReleaseVersion.filter(version: release_version).first
+          expect(rv).to be_nil
+
+          allow(job).to receive(:process_jobs).and_raise('Intentional error')
+          expect{job.process_release(extracted_release_dir)}.to raise_error('Intentional error')
+        end
+
+        it 'sets dirty flag' do
+          rv = Models::ReleaseVersion.filter(version: release_version).first
+          expect(rv).not_to be_nil
+          expect(rv.update_completed).to be(false)
+        end
+
+        context 'when release is dirty' do
+          it 'fixes the release by processing packages and jobs' do
+            allow(job).to receive(:process_jobs).and_call_original
+            job.process_release(extracted_release_dir)
+
+            expect(job.fix).to be(true)
+            rv = Models::ReleaseVersion.filter(version: release_version).first
+            expect(rv).not_to be_nil
+            expect(rv.update_completed).to be(true)
+          end
+        end
+      end
+    end
   end
 end

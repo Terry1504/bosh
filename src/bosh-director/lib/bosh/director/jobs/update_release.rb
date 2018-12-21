@@ -51,7 +51,11 @@ module Bosh::Director
 
         single_step_stage("Verifying manifest") { verify_manifest(release_dir) }
 
-        with_release_lock(@name) { process_release(release_dir) }
+        with_release_lock(@name) {
+          # Config.db.transaction do
+            process_release(release_dir)
+          # end
+        }
 
         "Created release '#{@name}/#{@version}'"
 
@@ -139,6 +143,8 @@ module Bosh::Director
           release_is_new = true
         end
 
+        @logger.warn("aaaaaaaa OUTSIDE fix=#{@fix}")
+
         if release_is_new
           @release_version_model.uncommitted_changes = @uncommitted_changes if @uncommitted_changes
           @release_version_model.commit_hash = @commit_hash if @commit_hash
@@ -148,6 +154,11 @@ module Bosh::Director
           raise ReleaseVersionCommitHashMismatch,
                 "release '#{@name}/#{@version}' has already been uploaded with commit_hash as " \
                 "'#{@release_version_model.commit_hash}' and uncommitted_changes as '#{@uncommitted_changes}'"
+        else
+          @fix = true if @release_version_model.update_completed == false
+          @logger.warn("aaaaaaaa fix=#{@fix}")
+          @release_version_model.update_completed = false
+          @release_version_model.save
         end
 
         single_step_stage("Resolving package dependencies") do
@@ -159,6 +170,9 @@ module Bosh::Director
 
         event_log_stage = Config.event_log.begin_stage(@compiled_release ? "Compiled Release has been created" : "Release has been created", 1)
         event_log_stage.advance_and_track("#{@name}/#{@version}") {}
+
+        @release_version_model.update_completed = true
+        @release_version_model.save
       end
 
       # Normalizes release manifest, so all names, versions, and checksums are Strings.
@@ -564,6 +578,8 @@ module Bosh::Director
             existing_jobs << [template, job_meta]
           end
         end
+
+        # raise StandardError "Oops"
 
         did_something = create_jobs(new_jobs, release_dir)
         did_something |= use_existing_jobs(existing_jobs, release_dir)
